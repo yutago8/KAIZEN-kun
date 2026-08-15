@@ -27,6 +27,8 @@ const NOTION_API = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2025-09-03';
 
 const DEFAULT_CHANNEL_ID = 'C04AATNK55G';
+/** @KAIZEN-Kun's bot user id, so mention detection works without a bot token. */
+const DEFAULT_BOT_USER_ID = 'U0BNWNXV5R9';
 const DEFAULT_DAILY_DATA_SOURCE_ID = 'bb7d697a-d3a1-48a8-a5ee-7c9bb2b08595';
 const DATE_PROPERTY = '日付';
 /** Heading to file photos under, e.g. "### 今日の写真". Falls back to page end. */
@@ -102,7 +104,7 @@ async function getBotUserId() {
   const configured = env('SLACK_BOT_USER_ID');
   if (configured) return configured;
   if (cachedBotUserId) return cachedBotUserId;
-  if (!env('SLACK_BOT_TOKEN')) return null;
+  if (!env('SLACK_BOT_TOKEN')) return DEFAULT_BOT_USER_ID;
   try {
     const res = await fetch(`${SLACK_API}/auth.test`, {
       method: 'POST',
@@ -110,10 +112,10 @@ async function getBotUserId() {
     });
     const json = await res.json();
     if (json.ok) cachedBotUserId = json.user_id;
-    return cachedBotUserId;
+    return cachedBotUserId || DEFAULT_BOT_USER_ID;
   } catch (err) {
     logError('auth.test failed:', err.message);
-    return null;
+    return DEFAULT_BOT_USER_ID;
   }
 }
 
@@ -453,7 +455,9 @@ export default async function handler(request, context) {
   const hasImages = (event.files || []).some((f) => (f.mimetype || '').startsWith('image/'));
   const isThreadReply = Boolean(event.thread_ts);
   const botUserId = await getBotUserId();
-  const isMention = !isThreadReply && Boolean(botUserId) && (event.text || '').includes(`<@${botUserId}>`);
+  // Slack writes mentions as <@U…> or <@U…|display-name>, depending on the client.
+  const isMention =
+    !isThreadReply && Boolean(botUserId) && new RegExp(`<@${botUserId}(\\||>)`).test(event.text || '');
 
   // The image pipeline outlives the Slack 3s ack window, so let it run after the
   // response. The relay stays inline — it is a single fast call.

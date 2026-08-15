@@ -43,7 +43,7 @@ Slack のリトライ（`x-slack-retry-num`）は二重アップロード防止�
 | `SLACK_BOT_TOKEN` | `xoxb-…`。スコープ **`files:read`** と **`reactions:write`** が必要 | **画像機能に必要** |
 | `NOTION_API_KEY` | Notion インテグレーショントークン。日次KAIZEN DB に接続共有しておくこと | **画像機能に必要** |
 | `KAIZEN_DAILY_DATA_SOURCE_ID` | 日次KAIZEN data source の上書き（未設定なら `bb7d697a-…`） | 任意 |
-| `SLACK_BOT_USER_ID` | メンション判定用。未設定なら `auth.test` で自動解決 | 任意 |
+| `SLACK_BOT_USER_ID` | メンション判定用。未設定なら `U0BNWNXV5R9`（@KAIZEN-Kun）を使う | 任意 |
 
 `SLACK_BOT_TOKEN` / `NOTION_API_KEY` が未設定の場合、画像処理はログを残してスキップし、
 既存のリレー動作はそのまま継続する。

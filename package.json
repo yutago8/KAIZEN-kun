@@ -1,0 +1,7 @@
+{
+  "name": "kaizen-kun",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Slack Events webhook for KAIZEN君 (Vercel)"
+}

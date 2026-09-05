@@ -18,6 +18,9 @@
  *   NOTION_API_KEY        - Notion integration token shared with 日次KAIZEN DB
  *   KAIZEN_DAILY_DATA_SOURCE_ID - optional override of the 日次KAIZEN data source
  *   SLACK_BOT_USER_ID     - optional; skips the auth.test lookup for mention detection
+ *
+ * GET ?diag=1  - which env vars are set (presence only)
+ * GET ?check=1 - live check that SLACK_BOT_TOKEN and NOTION_API_KEY actually work
  */
 
 export const config = { runtime: 'edge' };
@@ -378,6 +381,87 @@ async function fireRoutine(kind, event) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Setup self-check
+ * ------------------------------------------------------------------ */
+
+/**
+ * Slack and Notion error codes ("invalid_auth", "object_not_found") are safe to
+ * surface and are what makes a misconfiguration diagnosable; full response
+ * bodies are not, so keep it short.
+ */
+const shortError = (err) => String(err?.message || err).slice(0, 120);
+
+const REQUIRED_SLACK_SCOPES = ['files:read', 'reactions:write'];
+
+async function checkSlack() {
+  if (!env('SLACK_BOT_TOKEN')) return { ok: false, reason: 'SLACK_BOT_TOKEN is not set' };
+  try {
+    const res = await fetch(`${SLACK_API}/auth.test`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env('SLACK_BOT_TOKEN')}` },
+    });
+    const json = await res.json();
+    if (!json.ok) return { ok: false, reason: `auth.test: ${json.error}` };
+
+    // Slack reports a token's granted scopes on the response header, not in the body.
+    const granted = (res.headers.get('x-oauth-scopes') || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const missingScopes = granted.length ? REQUIRED_SLACK_SCOPES.filter((s) => !granted.includes(s)) : [];
+    // A token from a different app in the workspace authenticates fine but cannot
+    // read this channel's files, and would also break mention detection.
+    const isExpectedBot = json.user_id === env('SLACK_BOT_USER_ID', DEFAULT_BOT_USER_ID);
+
+    return {
+      ok: missingScopes.length === 0 && isExpectedBot,
+      bot_user_id: json.user_id,
+      is_expected_bot: isExpectedBot,
+      missing_scopes: missingScopes,
+      scopes_reported: granted.length > 0,
+    };
+  } catch (err) {
+    return { ok: false, reason: shortError(err) };
+  }
+}
+
+async function checkNotion() {
+  if (!env('NOTION_API_KEY')) return { ok: false, reason: 'NOTION_API_KEY is not set' };
+  const dataSourceId = env('KAIZEN_DAILY_DATA_SOURCE_ID', DEFAULT_DAILY_DATA_SOURCE_ID);
+
+  try {
+    await notionApi('/users/me');
+  } catch (err) {
+    return { ok: false, reason: `token rejected: ${shortError(err)}` };
+  }
+
+  let today = null;
+  try {
+    // Querying the data source is what actually proves the integration was
+    // shared with 日次KAIZEN DB — a valid token alone does not grant access.
+    today = await findDailyPage(jstDateOf(Date.now() / 1000));
+  } catch (err) {
+    return {
+      ok: false,
+      data_source_id: dataSourceId,
+      reason: `日次KAIZEN DB is not shared with this integration: ${shortError(err)}`,
+    };
+  }
+
+  return {
+    ok: true,
+    data_source_id: dataSourceId,
+    // Not a failure: photos are only skipped on days whose page does not exist yet.
+    today_page_found: Boolean(today),
+  };
+}
+
+async function runSetupCheck() {
+  const [slack, notion] = await Promise.all([checkSlack(), checkNotion()]);
+  return { ready: Boolean(slack.ok && notion.ok), slack, notion };
+}
+
+/* ------------------------------------------------------------------ *
  * Handler
  * ------------------------------------------------------------------ */
 
@@ -385,8 +469,10 @@ const ok = (body = 'ok') => new Response(body, { status: 200, headers: { 'conten
 
 export default async function handler(request, context) {
   if (request.method !== 'POST') {
+    const params = new URL(request.url).searchParams;
+
     // Presence-only diagnostic; never returns any secret value.
-    if (new URL(request.url).searchParams.get('diag') === '1') {
+    if (params.get('diag') === '1') {
       const names = [
         'SLACK_SIGNING_SECRET',
         'ROUTINE_FIRE_URL',
@@ -401,6 +487,18 @@ export default async function handler(request, context) {
         headers: { 'content-type': 'application/json' },
       });
     }
+
+    // Live check of the two photo credentials, so a misconfigured token is
+    // visible here instead of only as a silently skipped photo. Reports
+    // statuses and error codes only — no secret value is ever returned.
+    if (params.get('check') === '1') {
+      const result = await runSetupCheck();
+      return new Response(JSON.stringify(result, null, 2), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
+    }
+
     return ok();
   }
 

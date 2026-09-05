@@ -183,6 +183,11 @@ function blockPlainText(block) {
   return rich.map((t) => t.plain_text || '').join('');
 }
 
+/** Buttons and anything else the API cannot represent come back as "unsupported". */
+const isTrailingFurniture = (block) =>
+  block.type === 'unsupported' ||
+  (block.type === 'paragraph' && !block.has_children && !blockPlainText(block));
+
 /**
  * Locate where a photo should go: the end of the section under the first heading
  * matching PHOTO_HEADING_RE. Returns {parentId, afterId} — afterId null means
@@ -214,6 +219,12 @@ async function findPhotoAnchor(parentId, depth = 0) {
       if (nextLevel && nextLevel <= level) break;
       last = i;
     }
+    // 今日の写真 is the last heading of the daily template, so its section runs to
+    // the bottom of the page and ends with the template's button and a blank
+    // line. Appending after those puts the photo below the button rather than in
+    // the section, so back up over them. Earlier photos are kept as anchors, so
+    // a second photo still lands after the first.
+    while (last > headingIndex && isTrailingFurniture(blocks[last])) last--;
     return { parentId, afterId: blocks[last].id };
   }
 
